@@ -859,6 +859,7 @@ dir_each_entry(VALUE dir, VALUE (*each)(VALUE, VALUE), VALUE arg, int children_o
     GetDIR(dir, dirp);
     rewinddir(dirp->dir);
     IF_NORMALIZE_UTF8PATH(norm_p = need_normalization(dirp->dir, RSTRING_PTR(dirp->path)));
+    rb_errno_set(0);
     while ((dp = READDIR(dirp->dir, dirp->enc)) != NULL) {
         const char *name = dp->d_name;
         size_t namlen = NAMLEN(dp);
@@ -878,6 +879,10 @@ dir_each_entry(VALUE dir, VALUE (*each)(VALUE, VALUE), VALUE arg, int children_o
         path = rb_external_str_new_with_enc(name, namlen, dirp->enc);
         (*each)(arg, path);
     }
+
+    int e = errno;
+    if (e != 0) rb_syserr_fail(e, 0);
+
     return dir;
 }
 
@@ -902,7 +907,12 @@ dir_tell(VALUE dir)
     long pos;
 
     GetDIR(dir, dirp);
-    pos = telldir(dirp->dir);
+
+    if ((pos = telldir(dirp->dir)) == -1) {
+        int e = errno;
+        if (e != 0) rb_syserr_fail(e, 0);
+    }
+
     return rb_int2inum(pos);
 }
 #else
@@ -2501,6 +2511,7 @@ glob_opendir(ruby_glob_entries_t *ent, DIR *dirp, int flags, rb_encoding *enc)
             ent->sort.entries = newp;
         }
 #endif
+        rb_errno_set(0);
         while ((dp = READDIR(dirp, enc)) != NULL) {
             rb_dirent_t *rdp = dirent_copy(dp, NULL);
             if (!rdp) {
@@ -2515,6 +2526,8 @@ glob_opendir(ruby_glob_entries_t *ent, DIR *dirp, int flags, rb_encoding *enc)
             ent->sort.entries[count++] = rdp;
             ent->sort.count = count;
         }
+        int e = errno;
+        if (e != 0) rb_syserr_fail(e, 0);
         closedir(dirp);
         if (count < capacity) {
             if (!(newp = GLOB_REALLOC_N(ent->sort.entries, count))) {
@@ -2538,7 +2551,17 @@ static rb_dirent_t *
 glob_getent(ruby_glob_entries_t *ent, int flags, rb_encoding *enc)
 {
     if (flags & FNM_GLOB_NOSORT) {
-        return dirent_copy(READDIR(ent->nosort.dirp, enc), &ent->nosort.ent);
+        struct dirent *dp;
+
+        rb_errno_set(0);
+        if ((dp = READDIR(ent->nosort.dirp, enc)) != NULL) {
+            return dirent_copy(dp, &ent->nosort.ent);
+        }
+        else {
+            int e = errno;
+            if (e != 0) rb_syserr_fail(e, 0);
+            return Qnil;
+        }
     }
     else if (ent->sort.idx < ent->sort.count) {
         return ent->sort.entries[ent->sort.idx++];
@@ -3585,12 +3608,15 @@ nogvl_dir_empty_p(void *ptr)
             return (void *)INT2FIX(e);
         }
     }
+    rb_errno_set(0);
     while ((dp = READDIR(dir, NULL)) != NULL) {
         if (!to_be_skipped(dp)) {
             result = Qfalse;
             break;
         }
     }
+    int e = errno;
+    if (e != 0) rb_syserr_fail(e, 0);
     closedir(dir);
     return (void *)result;
 }
